@@ -1,0 +1,193 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------
+// Enums
+// -----------------------------
+
+enum Chain {
+  ETHEREUM
+  SOLANA
+  POLYGON
+}
+
+enum TxType {
+  SWAP
+  SEND
+  RECEIVE
+  BRIDGE_OUT
+  BRIDGE_IN
+  LP_ADD
+  LP_REMOVE
+  STAKE_REWARD
+  AIRDROP
+  FEE
+  APPROVAL
+  OTHER
+}
+
+enum IncomeKind {
+  STAKE_REWARD
+  AIRDROP
+  INTEREST
+  OTHER
+}
+
+enum CostBasisMethod {
+  FIFO
+  SPECIFIC_ID
+}
+
+// -----------------------------
+// Core Models
+// -----------------------------
+
+model Wallet {
+  id           String           @id @default(cuid())
+  chain        Chain
+  address      String
+  label        String?
+  basisMethod  CostBasisMethod  @default(FIFO)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  // Relations
+  txs          Tx[]
+  lots         Lot[]
+  disposals    Disposal[]
+  incomes      Income[]
+
+  @@unique([chain, address])
+}
+
+// Raw chain data for auditability
+model TxRaw {
+  txid              String   @id
+  chain             Chain
+  timestamp         DateTime
+  fromAddress       String?
+  toAddress         String?
+  programOrContract String?
+  rawJson           Json
+
+  @@index([chain, timestamp])
+}
+
+// Normalized economic events per transaction for tax logic
+model Tx {
+  id            String   @id @default(cuid())
+  walletId      String
+  wallet        Wallet   @relation(fields: [walletId], references: [id])
+
+  chain         Chain
+  type          TxType
+  txid          String
+  blockTime     DateTime
+
+  // Economic legs (optional depending on type)
+  baseAsset     String?
+  baseQty       Decimal?  @db.Decimal(38, 18)
+  quoteAsset    String?
+  quoteQty      Decimal?  @db.Decimal(38, 18)
+
+  // Fees (asset used to pay fees)
+  feeAsset      String?
+  feeQty        Decimal?  @db.Decimal(38, 18)
+
+  description   String?
+
+  createdAt     DateTime  @default(now())
+
+  // Back-relations
+  createdLots   Lot[]     @relation("LotSourceTx")
+
+  @@index([walletId, blockTime])
+  @@index([txid])
+  @@index([chain, blockTime])
+}
+
+// Inventory of lots created by acquisitions (buys, receipts, income)
+model Lot {
+  id                String   @id @default(cuid())
+  asset             String
+  quantityRemaining Decimal  @db.Decimal(38, 18)
+  acquiredTs        DateTime
+  basisUsd          Decimal  @db.Decimal(38, 2)
+
+  walletId          String?
+  wallet            Wallet?  @relation(fields: [walletId], references: [id])
+
+  sourceTxId        String?
+  sourceTx          Tx?      @relation("LotSourceTx", fields: [sourceTxId], references: [id])
+
+  createdAt         DateTime @default(now())
+
+  @@index([asset, walletId])
+  @@index([acquiredTs])
+}
+
+// Realizations of gains/losses when disposing of assets
+model Disposal {
+  id           String   @id @default(cuid())
+  asset        String
+  quantitySold Decimal  @db.Decimal(38, 18)
+
+  proceedsUsd  Decimal  @db.Decimal(38, 2)
+  basisUsd     Decimal  @db.Decimal(38, 2)
+  gainUsd      Decimal  @db.Decimal(38, 2)
+
+  method       CostBasisMethod
+  soldTs       DateTime
+  txid         String
+
+  walletId     String?
+  wallet       Wallet?  @relation(fields: [walletId], references: [id])
+
+  createdAt    DateTime @default(now())
+
+  @@index([soldTs])
+  @@index([asset, walletId])
+}
+
+// Ordinary income (staking rewards, airdrops, etc.) at FMV on receipt
+model Income {
+  id          String      @id @default(cuid())
+  kind        IncomeKind
+  asset       String
+  quantity    Decimal     @db.Decimal(38, 18)
+  fmvUsd      Decimal     @db.Decimal(38, 2)
+  receivedTs  DateTime
+  txid        String
+
+  walletId    String?
+  wallet      Wallet?     @relation(fields: [walletId], references: [id])
+
+  createdAt   DateTime    @default(now())
+
+  @@index([receivedTs])
+}
+
+// Cached historical prices for deterministic reports
+model Price {
+  id        String   @id @default(cuid())
+  asset     String
+  ts        DateTime
+  priceUsd  Decimal  @db.Decimal(38, 8)
+  source    String
+
+  @@unique([asset, ts, source])
+  @@index([asset, ts])
+}
