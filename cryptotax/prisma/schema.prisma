@@ -12,6 +12,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // -----------------------------
@@ -70,7 +71,7 @@ model Wallet {
   disposals    Disposal[]
   incomes      Income[]
 
-  @@unique([chain, address])
+  @@unique([chain, address], name: "chain_address")
 }
 
 // Raw chain data for auditability
@@ -83,6 +84,7 @@ model TxRaw {
   programOrContract String?
   rawJson           Json
 
+  @@unique([txid, chain], name: "txraw_chain_txid")
   @@index([chain, timestamp])
 }
 
@@ -117,6 +119,7 @@ model Tx {
   @@index([walletId, blockTime])
   @@index([txid])
   @@index([chain, blockTime])
+  @@unique([txid, walletId], name: "tx_wallet_txid")
 }
 
 // Inventory of lots created by acquisitions (buys, receipts, income)
